@@ -3,6 +3,7 @@ package ipam
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net/netip"
 	"sync"
 )
@@ -16,6 +17,10 @@ type Allocator struct {
 	keyToIp map[string]netip.Addr
 	ipToKey map[netip.Addr]string
 }
+
+var (
+	ErrAllocatorIsFull = errors.New("allocator is full")
+)
 
 func New(prefix netip.Prefix) (*Allocator, error) {
 	if !prefix.IsValid() {
@@ -58,7 +63,7 @@ func (a *Allocator) Allocate(key string) (netip.Addr, error) {
 		return ip, nil
 	}
 
-	return netip.Addr{}, errors.New("allocator is full")
+	return netip.Addr{}, ErrAllocatorIsFull
 }
 
 func (a *Allocator) Release(key string) {
@@ -76,6 +81,33 @@ func (a *Allocator) Release(key string) {
 	if off, ok := a.addrToOffset(ip); ok && off < a.next {
 		a.next = off
 	}
+}
+
+func (a *Allocator) Reserve(key, ipStr string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	ip, err := netip.ParseAddr(ipStr)
+	if err != nil {
+		return fmt.Errorf("failed to parse given ip: %w", err)
+	}
+
+	if !a.prefix.Contains(ip) {
+		return fmt.Errorf("ip %s is out of pool range %s", ip, a.prefix)
+	}
+
+	if owner, ok := a.ipToKey[ip]; ok && owner != key {
+		return fmt.Errorf("ip %s is already reserved by %s", ip, owner)
+	}
+
+	a.ipToKey[ip] = key
+	a.keyToIp[key] = ip
+
+	if off, ok := a.addrToOffset(ip); ok && off == a.next {
+		a.next = (a.next + 1) % a.size
+	}
+
+	return nil
 }
 
 func (a *Allocator) offsetToAddr(off uint64) netip.Addr {

@@ -175,6 +175,121 @@ func TestRelease(t *testing.T) {
 	})
 }
 
+func TestReserve(t *testing.T) {
+	tests := []struct {
+		name    string
+		prefix  string
+		wantErr bool
+		key     string
+		ipStr   string
+	}{
+		{
+			name:    "valid IPv4 reservation",
+			prefix:  testPrefix,
+			wantErr: false,
+			key:     "gateway",
+			ipStr:   "192.168.1.1",
+		},
+		{
+			name:    "valid IPv6 reservation",
+			prefix:  "2001:db8::/65",
+			wantErr: false,
+			key:     "v6-host",
+			ipStr:   "2001:db8::10",
+		},
+		{
+			name:    "invalid IP string",
+			prefix:  testPrefix,
+			wantErr: true,
+			key:     "bad-ip",
+			ipStr:   "not-an-ip",
+		},
+		{
+			name:    "empty IP string",
+			prefix:  testPrefix,
+			wantErr: true,
+			key:     "empty-ip",
+			ipStr:   "",
+		},
+		{
+			name:    "IP out of pool range",
+			prefix:  testPrefix,
+			wantErr: true,
+			key:     "outside",
+			ipStr:   "192.168.2.1",
+		},
+		{
+			name:    "address family mismatch (IPv6 against IPv4 pool)",
+			prefix:  testPrefix,
+			wantErr: true,
+			key:     "v6-in-v4",
+			ipStr:   "2001:db8::1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testAllocator, err := New(netip.MustParsePrefix(tt.prefix))
+			require.NoError(t, err)
+			err = testAllocator.Reserve(tt.key, tt.ipStr)
+			if tt.wantErr {
+				require.Error(t, err)
+				if ip, err := netip.ParseAddr(tt.ipStr); err == nil {
+					assert.Empty(t, testAllocator.ipToKey[ip])
+				}
+				assert.Empty(t, testAllocator.keyToIp[tt.key])
+				return
+			}
+
+			require.NoError(t, err)
+			ip, err := netip.ParseAddr(tt.ipStr)
+			require.NoError(t, err)
+			assert.Equal(t, tt.key, testAllocator.ipToKey[ip])
+			assert.Equal(t, ip, testAllocator.keyToIp[tt.key])
+		})
+	}
+
+	t.Run("rejects IP already reserved by another key", func(t *testing.T) {
+		testAllocator, err := New(netip.MustParsePrefix(testPrefix))
+		require.NoError(t, err)
+
+		ipStr := "192.168.1.10"
+		ip := netip.MustParseAddr(ipStr)
+
+		require.NoError(t, testAllocator.Reserve("key1", ipStr))
+
+		err = testAllocator.Reserve("key2", ipStr)
+		require.Error(t, err)
+		assert.Equal(t, "key1", testAllocator.ipToKey[ip])
+		assert.Equal(t, ip, testAllocator.keyToIp["key1"])
+		assert.Empty(t, testAllocator.keyToIp["key2"])
+	})
+
+	t.Run("idempotent test", func(t *testing.T) {
+		testAllocator, err := New(netip.MustParsePrefix(testPrefix))
+		require.NoError(t, err)
+
+		ipStr := "192.168.1.10"
+		ip := netip.MustParseAddr(ipStr)
+
+		require.NoError(t, testAllocator.Reserve("key1", ipStr))
+		require.NoError(t, testAllocator.Reserve("key1", ipStr))
+		assert.Equal(t, "key1", testAllocator.ipToKey[ip])
+		assert.Equal(t, ip, testAllocator.keyToIp["key1"])
+	})
+
+	t.Run("advances next pointer when reserving current next offset", func(t *testing.T) {
+		testAllocator, err := New(netip.MustParsePrefix("192.168.1.0/30"))
+		require.NoError(t, err)
+
+		initialNext := testAllocator.next
+		nextAddr := testAllocator.offsetToAddr(initialNext)
+
+		require.NoError(t, testAllocator.Reserve("key1", nextAddr.String()))
+		assert.Equal(t, (initialNext+1)%testAllocator.size, testAllocator.next)
+	})
+}
+
 func TestOffsetToAddr(t *testing.T) {
 	tests := []struct {
 		name    string
