@@ -45,7 +45,6 @@ struct {
 	__uint(max_entries, 1024);
 	__type(key, struct lb_key);
 	__type(value, struct lb_service);
-	__uint(pinning, LIBBPF_PIN_BY_NAME);
 } lb_services SEC(".maps");
 
 struct {
@@ -53,7 +52,6 @@ struct {
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, struct lb_mac);
-	__uint(pinning, LIBBPF_PIN_BY_NAME);
 } lb_mac SEC(".maps");
 
 struct {
@@ -61,7 +59,6 @@ struct {
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, struct lb_stats);
-	__uint(pinning, LIBBPF_PIN_BY_NAME);
 } lb_stats SEC(".maps");
 
 static __always_inline __u16 csum16_add(__u16 csum, __u16 addend) {
@@ -169,6 +166,8 @@ int xdp_lb(struct xdp_md *ctx) {
 	__u32 rr = svc->rr;
 	__sync_fetch_and_add(&svc->rr, 1);
 	__u32 idx = rr % count;
+
+	barrier_var(idx);
 	if (idx >= MAX_BACKENDS)
 		return XDP_DROP;
 
